@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="workbench-token" content="__SESSION_TOKEN__">
+  <meta name="theme-color" content="#171a17">
+  <title>GRUDGE LAB · 对话证据工作台</title>
+  <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/style.css">
+  <link rel="stylesheet" href="/corpus.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/" aria-label="GRUDGE LAB 首页"><img src="/favicon.svg" alt=""><span>GRUDGE<span class="brand-light"> LAB</span><small>记得原话，出言有据。</small></span></a>
+    <div class="nav-label">WORKSPACE</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="workbench"><span data-icon="grid"></span>提示词工作台<span class="nav-number">01</span></button>
+      <button class="nav-item" data-view="settings"><span data-icon="database"></span>数据与模型<span class="nav-number">02</span></button>
+    </nav>
+    <div class="sidebar-divider"></div>
+    <div class="nav-label user-heading">人物档案<span id="user-count">03</span></div>
+    <div id="user-list" class="user-list" aria-label="用户列表"></div>
+    <div class="sidebar-bottom"><div class="local-badge"><span></span>本地工作空间</div><p>原文只读 · 记忆可清除</p><div class="version">GRUDGE LAB <span>v0.1.0 ↗</span></div></div>
+  </aside>
+
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumb">工作空间 <span>/</span> <strong id="page-label">提示词工作台</strong></div><div class="topbar-right"><span class="small-status"><i></i>服务已连接</span><span class="avatar owner">L</span></div></header>
+
+    <main id="workbench-view">
+      <div class="page-heading"><div><div class="eyebrow">MEMORY IN. PRECISION OUT.</div><h1>说得犀利，也站得住。</h1><p>从聊天原文中提取可核对的记忆，生成有锋芒的对话提示词。</p></div><button class="button secondary" id="open-settings"><span data-icon="sliders"></span>工作台设置</button></div>
+
+      <section class="overview" aria-label="工作台概况"><div><span class="stat-icon" data-icon="database"></span><div><small>原文数据库</small><strong id="database-name">demo.db</strong></div><span class="pill green">只读</span></div><div><span class="stat-icon" data-icon="messages"></span><div><small>当前读取</small><strong><span id="message-count">—</span><em>条原始消息</em></strong></div></div><div><span class="stat-icon" data-icon="memory"></span><div><small>持久化记忆</small><strong><span id="memory-count">0</span><em>条证据记录</em></strong></div></div><div><span class="stat-icon" data-icon="spark"></span><div><small>分析引擎</small><strong id="engine-name">本地演示</strong></div><span id="engine-badge" class="pill neutral">DEMO</span></div></section>
+
+      <div class="workbench-grid">
+        <section class="panel profile-panel">
+          <div class="panel-heading"><div><span class="step">01</span><h2>人物与证据</h2></div><span class="eyebrow faint">SOURCE MATERIAL</span></div>
+          <div class="person-card"><div class="avatar person" id="person-avatar">林</div><div><h3 id="person-name">正在读取…</h3><div class="person-meta"><span id="person-id">USER / —</span><span class="dot"></span><span id="person-status">等待分析</span></div></div><span class="pill orange" id="person-mode">虚构测试</span></div>
+          <div class="consent-row"><div><strong>开启此用户的长期记忆</strong><p>已获用户同意；关闭时清除全部记忆。</p></div><label class="switch"><input id="consent-switch" type="checkbox" aria-label="已获用户同意，开启长期记忆"><span></span></label></div>
+          <div class="tabs" role="tablist" aria-label="人物资料"><button id="memories-tab" class="tab active" role="tab" aria-selected="true">证据记忆 <span id="memory-tab-count">0</span></button><button id="messages-tab" class="tab" role="tab" aria-selected="false">聊天原文 <span id="message-tab-count">0</span></button></div>
+          <div id="memories-content" class="evidence-list"></div>
+          <div id="messages-content" class="message-list" hidden></div>
+          <div class="analysis-footer"><span id="analysis-note"><i class="tiny-dot"></i>原句可追溯，判断有边界</span><button class="button dark" id="analyze-button"><span data-icon="spark"></span><span>提取证据记忆</span><span data-icon="arrow"></span></button></div>
+        </section>
+
+        <section class="panel prompt-panel">
+          <div class="panel-heading"><div><span class="step">02</span><h2>提示词构建</h2></div><span class="pill neutral">PROMPT BLOCK</span></div>
+          <div class="prompt-settings"><div class="control-label"><label>表达强度</label><span>锋芒加在措辞上，证据保持精确。</span></div><div class="intensity-picker" role="group" aria-label="表达强度"><button data-intensity="1"><span data-icon="feather"></span>轻度玩笑<small>LEVEL 01</small></button><button class="selected" data-intensity="2"><span data-icon="bolt"></span>中度严肃<small>LEVEL 02</small></button></div><div class="budget-row"><label for="prompt-budget">上下文预算</label><select id="prompt-budget"><option value="3000">3,000 字符 · 紧凑</option><option value="6000" selected>6,000 字符 · 标准</option><option value="12000">12,000 字符 · 完整</option></select></div></div>
+          <div class="editor-top"><span><i></i> SYSTEM CONTEXT <em>/ Markdown</em></span><button class="icon-button" id="copy-button" aria-label="复制提示词" title="复制提示词"><span data-icon="copy"></span></button></div>
+          <div class="prompt-editor"><div id="prompt-placeholder" class="prompt-placeholder"><div class="code-symbol">{<span>✳</span>}</div><h3>让每一句，都有来处。</h3><p>开启记忆并提取证据后，生成可直接复制的提示词块。</p><div class="placeholder-tags"><span>原句引用</span><span>语境检查</span><span>精准表达</span></div></div><pre id="prompt-output" tabindex="0" aria-label="生成的提示词" hidden></pre></div>
+          <div class="editor-meta"><span id="prompt-meta">等待生成</span><span>UTF-8 <span class="meta-separator">|</span> 中文</span></div>
+          <div class="generate-row"><button class="button primary" id="generate-button"><span data-icon="terminal"></span>生成提示词块<span data-icon="arrow"></span></button><button class="button secondary export-button" id="export-button"><span data-icon="download"></span>导出 .md</button></div>
+        </section>
+      </div>
+      <section class="panel corpus-panel" aria-labelledby="corpus-title">
+        <div class="panel-heading"><div><span class="step">03</span><h2 id="corpus-title">全文索引与人物检索</h2></div><span class="pill neutral">MCP READY</span></div>
+        <div class="corpus-content">
+          <div class="corpus-actions"><button type="button" class="button dark" id="index-person">索引当前人物</button><button type="button" class="button secondary" id="index-all">索引全部已授权人物</button></div>
+          <p id="index-status" role="status">索引支持后台处理、增量更新和中断续跑。</p>
+          <form id="material-search" class="corpus-search"><label class="field">当前人物的话题 / 原话关键词<input id="material-query" maxlength="200" placeholder="例如：四十页"></label><label class="field">精确话题筛选<input id="material-topic" maxlength="64" placeholder="可留空"></label><button class="button primary" id="search-materials">查询素材</button></form>
+          <p id="material-note">查询和预览不计数。实际采用后再确认使用；过去 24 小时用过的素材后置。</p>
+          <div id="material-results" class="corpus-results" aria-live="polite"></div>
+        </div>
+      </section>
+      <div class="principle-note"><span data-icon="shield"></span><span><strong>锋利的表达，清楚的边界。</strong> 只引用本人原话；不把推测当事实；已改口的观点需要重新核对。</span><span class="note-mark">BUILT ON EVIDENCE</span></div>
+      <footer class="page-footer"><span>GRUDGE LAB / 对话证据工作台</span><span>原文 → 证据 → 记忆 → 提示词 <span class="orange-text">↗</span></span></footer>
+    </main>
+
+    <main id="settings-view" hidden>
+      <div class="page-heading"><div><div class="eyebrow">YOUR DATA. YOUR MODEL.</div><h1>数据与模型</h1><p>自定义 SQLite 结构，独立配置负责分析原文的 LLM。</p></div><button class="button secondary" id="back-workbench"><span data-icon="arrow-left"></span>返回工作台</button></div>
+      <form id="settings-form" class="settings-grid">
+        <section class="panel settings-panel"><div class="panel-heading"><div><span class="step">01</span><h2>原始聊天数据库</h2></div><span class="pill green">READ ONLY</span></div><div class="form-content"><label class="field">SQLite 文件路径<input id="source-path" required placeholder="/absolute/path/to/chat.db"><small>仅以只读模式连接，不会修改原始数据。</small></label><button type="button" id="inspect-schema" class="button secondary"><span data-icon="search"></span>读取数据库结构</button><div id="schema-result" class="schema-result" hidden></div><div class="form-row"><label class="field">消息表名<input id="source-table" required list="table-options"><datalist id="table-options"></datalist></label><label class="field">每次读取条数<input id="source-limit" required type="number" min="1" max="1000" value="120"></label></div><div class="form-divider"><span>字段映射</span><small>可直接输入自定义列名</small></div><div id="mapping-fields" class="mapping-grid"></div><datalist id="column-options"></datalist><div class="form-info"><span data-icon="info"></span>时间字段用于排序，建议 ISO 8601 文本或整数时间戳。ID 对同一用户必须唯一；跨消息比较需映射会话字段。</div></div></section>
+        <div class="settings-right"><section class="panel settings-panel"><div class="panel-heading"><div><span class="step">02</span><h2>原文分析引擎</h2></div></div><div class="form-content"><label class="field">运行模式<select id="llm-mode"><option value="demo">本地演示 · 无需 API Key</option><option value="llm">自定义 LLM · Chat Completions</option></select></label><div class="demo-note" id="demo-note"><span data-icon="spark"></span><div><strong>先体验，再连接。</strong><p>演示模式使用有限的本地规则，只覆盖测试数据中的偏好与示例梗。任意聊天的语义分析需配置真实 LLM。</p></div></div><div id="llm-fields" hidden><label class="field">Base URL<input id="llm-url" type="url" placeholder="https://your-provider.example/v1"><small>兼容 /chat/completions；本地服务允许 HTTP。</small></label><label class="field">模型名称<input id="llm-model" placeholder="填写供应商提供的模型 ID"></label><label class="field">API Key<input id="llm-key" type="password" autocomplete="off" placeholder="仅保存在服务进程内存中"><small id="key-note">不会写入配置文件，不会返回给浏览器。</small></label><label class="remote-consent"><input type="checkbox" id="remote-confirm">我已获相关用户授权，可将所选聊天原文发送给该模型服务。</label></div></div></section><section class="panel settings-hint"><span data-icon="terminal"></span><h3>只生成提示词。</h3><p>模型负责读原文与提取证据。本工具导出上下文块，供你自行审阅、复制和使用。</p><code>python3 run.py export zhou</code></section><button type="submit" class="button primary save-settings"><span data-icon="check"></span>验证并保存配置</button><p class="save-note">保存前校验数据表和全部字段映射。</p></div>
+      </form>
+    </main>
+  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+</body>
+</html>

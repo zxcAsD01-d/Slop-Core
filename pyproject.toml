@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "grudge-lab"
+version = "0.2.0"
+description = "Evidence-backed conversation memory and prompt block workbench"
+requires-python = ">=3.11"
+dependencies = ["mcp>=2,<3"]
+
+[project.scripts]
+grudge-lab = "grudge_lab.cli:main"
+
+[tool.setuptools.package-data]
+grudge_lab = ["static/*"]
+
+[tool.setuptools.packages.find]
+include = ["grudge_lab*"]

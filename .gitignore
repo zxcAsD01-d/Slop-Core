@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.env
+.env.*
+.state/
+data/*.db
+data/*.db-*
+artifacts/
+output/
+.playwright-cli/
+.DS_Store
