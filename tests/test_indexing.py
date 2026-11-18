@@ -3,6 +3,8 @@ import sqlite3
 import tempfile
 import time
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import asdict, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -93,6 +95,37 @@ class IndexingTests(unittest.TestCase):
         ordered = self.plugin.search_person_materials("zhou")["materials"]
         self.assertEqual([item["id"] for item in ordered[:2]],
                          [materials[0]["id"], materials[1]["id"]])
+
+    def test_preview_batch_reuses_receipts_without_writing_and_rechecks_consent(self):
+        self.index()
+        store = self.plugin.store
+        key = self.config.key
+        ids = [int(item["id"]) for item in store.search_materials(key, "zhou") if not item["risk_only"]]
+        self.assertGreaterEqual(len(ids), 2)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(store.preview_receipts, key, "zhou", ids) for _ in range(2)]
+            first, second = (future.result(timeout=5) for future in futures)
+        self.assertEqual(first, second)
+
+        statements = []
+        connect = store.connect
+
+        @contextmanager
+        def traced_connection():
+            with connect() as connection:
+                connection.set_trace_callback(statements.append)
+                yield connection
+
+        with patch.object(store, "connect", traced_connection):
+            self.assertEqual(store.preview_receipts(key, "zhou", ids), first)
+        self.assertEqual(len(statements), 1)
+        self.assertTrue(statements[0].startswith("SELECT"))
+
+        self.plugin.set_consent("zhou", False)
+        with self.assertRaises(AppError) as context:
+            store.preview_receipts(key, "zhou", ids)
+        self.assertEqual(context.exception.status, 409)
+        self.assertEqual(store.pending_previews(key, "zhou"), [])
 
     def test_unchanged_skips_model_and_incremental_preserves_usage(self):
         self.index()

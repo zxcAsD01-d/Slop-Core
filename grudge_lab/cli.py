@@ -9,7 +9,8 @@ from typing import get_args
 from .errors import AppError
 from .indexing import IndexManager
 from .plugin import PromptPlugin
-from .redteam import Intensity, ScenarioName, generate_redteam_cases
+from .redteam import Intensity, generate_redteam_cases, redteam_jsonl, scenario_catalog
+from .redteam_catalog import Category, ScenarioName
 from .sample import create_sample
 from .server import serve
 from .settings import Settings
@@ -50,9 +51,14 @@ def parser() -> argparse.ArgumentParser:
     used.add_argument("user_id")
     used.add_argument("material_id", type=int)
     used.add_argument("idempotency_key")
-    redteam = commands.add_parser("redteam", help="生成虚构 AI 多轮压力测试 JSON")
+    redteam = commands.add_parser("redteam", help="导出虚构 AI 多轮压力测试用例")
     redteam.add_argument("--scenario", choices=get_args(ScenarioName), default="all")
     redteam.add_argument("--intensity", choices=get_args(Intensity), default="high")
+    redteam.add_argument("--category", choices=get_args(Category))
+    redteam.add_argument("--seed", type=int, help="以固定种子决定用例顺序")
+    redteam.add_argument("--limit", type=int, help="最多导出的用例数")
+    redteam.add_argument("--format", choices=("json", "jsonl"), default="json")
+    commands.add_parser("redteam-catalog", help="列出虚构 AI 压测场景")
     mcp = commands.add_parser("mcp", help="运行本机 stdio MCP 服务")
     mcp.add_argument("--redteam-only", action="store_true", help="仅开放 AI 压测用例生成")
     return result
@@ -72,6 +78,16 @@ def main() -> None:
         raise SystemExit(130)
 
 
+def export_redteam(arguments: argparse.Namespace) -> None:
+    batch = generate_redteam_cases(arguments.scenario, arguments.intensity, category=arguments.category,
+                                   seed=arguments.seed, limit=arguments.limit)
+    if arguments.format == "jsonl":
+        for line in redteam_jsonl(batch):
+            print(line)
+    else:
+        print(json.dumps(batch, ensure_ascii=False, indent=2))
+
+
 def dispatch(arguments: argparse.Namespace, root: Path) -> None:
     command = arguments.command or "serve"
     if command == "seed":
@@ -87,8 +103,10 @@ def dispatch(arguments: argparse.Namespace, root: Path) -> None:
         run_mcp(root, redteam_only=arguments.redteam_only)
         return
     if command == "redteam":
-        batch = generate_redteam_cases(arguments.scenario, arguments.intensity)
-        print(json.dumps(batch, ensure_ascii=False, indent=2))
+        export_redteam(arguments)
+        return
+    if command == "redteam-catalog":
+        print(json.dumps({"scenarios": scenario_catalog()}, ensure_ascii=False, indent=2))
         return
     settings = Settings(root)
     plugin = PromptPlugin(settings.source(), root / ".state" / "memory.db", settings.public()["limit"])

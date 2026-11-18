@@ -118,6 +118,8 @@ class MemoryStore:
                     material_id INTEGER NOT NULL, created_at TEXT NOT NULL, confirmed INTEGER NOT NULL DEFAULT 0,
                     FOREIGN KEY(material_id) REFERENCES corpus_materials(id) ON DELETE CASCADE
                 );
+                CREATE INDEX IF NOT EXISTS material_previews_pending_material
+                    ON material_previews(source_key, user_id, material_id) WHERE confirmed = 0;
                 CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(
                     title, topic, observation, angle, risk_reason, safe_rewrite,
                     content='corpus_materials', content_rowid='id', tokenize='trigram'
@@ -687,22 +689,49 @@ class MemoryStore:
             )
 
     def preview_receipt(self, source_key: str, user_id: str, material_id: int) -> str:
-        receipt = uuid4().hex
+        return self.preview_receipts(source_key, user_id, [material_id])[material_id]
+
+    def preview_receipts(self, source_key: str, user_id: str, material_ids: List[int]) -> Dict[int, str]:
+        ids = list(dict.fromkeys(material_ids))
+        if not ids:
+            return {}
+        if len(ids) > 50:
+            raise AppError("每批最多预览 50 条素材")
         with self.connect() as connection:
+            existing = self._available_receipts(connection, source_key, user_id, ids)
+            if len(existing) == len(ids):
+                return existing
+
+            # 等待其他写入者释放锁后，重新校验授权并读取可能已创建的凭证。
             connection.execute("BEGIN IMMEDIATE")
-            prior = connection.execute(
-                "SELECT receipt FROM material_previews WHERE source_key = ? AND user_id = ? "
-                "AND material_id = ? AND confirmed = 0 LIMIT 1", (source_key, user_id, material_id),
-            ).fetchone()
-            if prior:
-                return str(prior[0])
-            connection.execute(
+            existing = self._available_receipts(connection, source_key, user_id, ids)
+            missing = {material_id: uuid4().hex for material_id in ids if material_id not in existing}
+            timestamp = now()
+            connection.executemany(
                 "INSERT INTO material_previews (receipt, source_key, user_id, material_id, created_at) "
-                "SELECT ?, ?, ?, ?, ? WHERE EXISTS "
-                "(SELECT 1 FROM consent WHERE source_key = ? AND user_id = ? AND enabled = 1)",
-                (receipt, source_key, user_id, material_id, now(), source_key, user_id),
+                "VALUES (?, ?, ?, ?, ?)",
+                [(receipt, source_key, user_id, material_id, timestamp) for material_id, receipt in missing.items()],
             )
-        return receipt
+        return existing | missing
+
+    @staticmethod
+    def _available_receipts(connection: sqlite3.Connection, source_key: str, user_id: str,
+                            ids: List[int]) -> Dict[int, str]:
+        placeholders = ", ".join("?" for _ in ids)
+        rows = connection.execute(
+            "SELECT m.id, (SELECT p.receipt FROM material_previews p "
+            "WHERE p.source_key = m.source_key AND p.user_id = m.user_id AND p.material_id = m.id "
+            "AND p.confirmed = 0 ORDER BY p.rowid LIMIT 1) AS receipt "
+            "FROM corpus_materials m JOIN corpus_users u USING (source_key, user_id) "
+            "JOIN consent c USING (source_key, user_id) JOIN corpus_generation_materials gm "
+            "ON gm.material_id = m.id AND gm.generation_id = u.active_generation "
+            "WHERE m.source_key = ? AND m.user_id = ? AND c.enabled = 1 AND u.status = 'complete' "
+            "AND m.severity < 3 AND m.risk_level < 3 AND m.id IN (" + placeholders + ")",
+            (source_key, user_id, *ids),
+        ).fetchall()
+        if len(rows) != len(ids):
+            raise AppError("素材已变更或授权已撤回，请重新查询", 409)
+        return {row["id"]: row["receipt"] for row in rows if row["receipt"] is not None}
 
     def pending_previews(self, source_key: str, user_id: str) -> List[Dict[str, object]]:
         with self.connect() as connection:

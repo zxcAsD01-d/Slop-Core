@@ -83,10 +83,9 @@ class PromptPlugin:
         safe = [item for item in materials if not item["risk_only"]]
         risks = [item for item in materials if item["risk_only"]]
         prompt = build_prompt(user_id, user_id, safe, 2, 12000, risks)
+        receipts = self.store.preview_receipts(self.source.key, user_id, [int(item["id"]) for item in safe])
         for material in safe:
-            material["use_receipt"] = self.store.preview_receipt(
-                self.source.key, user_id, int(material["id"]),
-            )
+            material["use_receipt"] = receipts[int(material["id"])]
         return {"person_id": user_id, "materials": materials, "prompt_block": prompt["text"],
                 "pending_confirmations": pending,
                 "usage_note": "预览不计数。仅实际采用后用 use_receipt 作为 idempotency_key 确认；未采用可忽略提醒。",

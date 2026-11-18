@@ -11,7 +11,7 @@ from mcp.types import CallToolResult
 
 from grudge_lab.models import SourceConfig
 from grudge_lab.plugin import PromptPlugin
-from grudge_lab.redteam import generate_redteam_cases
+from grudge_lab.redteam import generate_redteam_cases, scenario_catalog
 from grudge_lab.sample import create_sample
 
 
@@ -31,7 +31,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                     tools = await session.list_tools()
                     self.assertEqual({item.name for item in tools.tools},
                         {"list_people", "search_person_materials", "get_material_detail",
-                         "confirm_material_use", "start_index", "get_index_status", "redteam_cases"})
+                         "confirm_material_use", "start_index", "get_index_status", "redteam_cases", "redteam_catalog"})
                     people = self.data(await session.call_tool("list_people", {}))
                     self.assertEqual(people["people"][0]["person_id"], "zhou")
                     await self.exercise_materials(session)
@@ -68,12 +68,16 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
                     tools = await session.list_tools()
-                    self.assertEqual([item.name for item in tools.tools], ["redteam_cases"])
-                    args = {"scenario": "false_premise", "intensity": "standard"}
+                    self.assertEqual({item.name for item in tools.tools}, {"redteam_cases", "redteam_catalog"})
+                    catalog = self.data(await session.call_tool("redteam_catalog", {}))
+                    self.assertEqual(catalog["scenarios"], scenario_catalog())
+                    args = {"category": "evidence", "intensity": "standard", "seed": 42, "limit": 2}
                     result = self.data(await session.call_tool("redteam_cases", args))
                     self.assertEqual(result, generate_redteam_cases(**args))
                     invalid = await session.call_tool("redteam_cases", {"scenario": "custom"})
                     self.assertTrue(invalid.is_error)
+                    invalid_limit = await session.call_tool("redteam_cases", {"limit": 0})
+                    self.assertTrue(invalid_limit.is_error)
             self.assertEqual(list(root.iterdir()), [])
 
     def data(self, result: CallToolResult):

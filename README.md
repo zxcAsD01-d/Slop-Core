@@ -23,16 +23,20 @@ uv run grudge-lab
 
 ## AI 红队用例
 
-五类虚构场景覆盖挑衅、归责、虚构共识、虚构前提和强迫无条件保证。每个用例包含目标 AI 角色、按顺序排列的 `turns`、蓝队通过标准 `pass_criteria` 和「严格谨慎使用」标记。`standard` 为两轮，`high` 追加第三轮。
+12 个虚构场景覆盖语气施压 `tone`、证据可靠性 `evidence`、约束边界 `boundaries` 和纠错恢复 `recovery`。每个用例包含目标 AI 角色、按顺序排列的 `turns`、和消息一一对应的 `turn_checks`、整组通过标准 `pass_criteria`，以及「严格谨慎使用」标记。`standard` 为两轮，`high` 追加第三轮。
 
 ```bash
+uv run grudge-lab redteam-catalog
 uv run grudge-lab redteam --scenario all --intensity high > redteam-cases.json
+uv run grudge-lab redteam --category evidence --seed 42 --limit 2 --format jsonl > redteam-smoke.jsonl
 uv run grudge-lab mcp --redteam-only
 ```
 
-第一条命令导出版本化 JSON。第二条命令以 stdio 运行单独的 MCP 服务，只开放 `redteam_cases(scenario="all", intensity="high")`。CLI 和 MCP 复用同一组固定用例，独立模式无需聊天库或模型配置。
+CLI 和 MCP 复用同一目录与选择规则。`redteam-catalog`（MCP 中为 `redteam_catalog`）返回场景元数据。MCP 的 `redteam_cases` 支持 `scenario`、`intensity`、`category`、`seed` 和 `limit`。独立模式只开放这两个只读工具，无需聊天库或模型配置。
 
-在蓝队隔离测试环境中，为每个用例开启新会话，依次将 `turns` 作为用户消息输入，逐轮记录回复，再对照 `pass_criteria` 判定。`target_role` 可用于设置被测助手的角色，判定标准留在测试端。插件只生成用例，不发送消息或运行蓝队。
+固定目录版本和选择参数可复现同一批用例。`suite_id` 是版本、强度及有序用例内容的 SHA-256，供蓝队记录选用的测试集。JSONL 每行包含一组对话及批次元数据。JSON 保留版本 1 的已有字段，并增加 `suite_id`、`category` 和 `turn_checks`。
+
+在蓝队隔离环境中，为每个用例开启新会话，并用 `target_role` 设置被测助手角色。依次发送 `turns` 中的用户消息，按 `turn_checks` 评估各轮，再按 `pass_criteria` 评估整组。判定标准留在测试端。插件仅负责生成和导出用例。
 
 ## 数据与记忆流程
 
@@ -139,6 +143,22 @@ uv run python -m unittest discover -s tests -v
 
 CLI 使用网页保存的配置；若为真实 LLM 模式，独立 CLI 进程需用环境变量提供 Key。
 
+## 素材检索性能
+
+检索结果共用一次批量凭证查询。凭证缺失时在同一写事务内重新校验授权和索引状态，再批量写入。预览计数规则与凭证确认方式沿用原接口。
+
+```mermaid
+flowchart LR
+    A[授权、索引和来源已通过检索校验] --> B[批量查询可用凭证]
+    B -->|全部命中| C[返回凭证]
+    B -->|有缺失| D[开启一次写事务]
+    D --> E[复核授权、索引和已有凭证]
+    E --> F[插入仍缺失的凭证]
+    F --> C
+```
+
+运行 `uv run python -m scripts.benchmark_material_search`，在临时 SQLite 库中测量返回 50 条素材时的首次耗时、复用凭证后的 P50 和 P95，以及每次查询的连接次数。脚本写入合成素材，测量完成后清理临时库。
+
 ## 本地文件
 
 ```text
@@ -148,7 +168,8 @@ grudge_lab/
   llm.py           独立 LLM HTTP 客户端
   store.py         同意状态与记忆持久化
   prompts.py       人物证据提示词组装
-  redteam.py       虚构 AI 多轮用例
+  redteam.py       红队用例选择和导出
+  redteam_catalog.py 虚构场景和逐轮验收标准
   plugin.py        可复用接口
   server.py        本地 HTTP 工作台
   static/          无构建依赖的网页
