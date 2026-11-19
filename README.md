@@ -1,8 +1,8 @@
 # GRUDGE LAB · 对话证据工作台
 
-一个独立的 SQLite 聊天分析插件：持久化有原文依据的观察，生成可以复制、导出的中文提示词块。**不调用主对话 AI，也不自动发布回复。**
+Slop-Core 是用于 AI 对抗训练的红队聊天插件。它生成可复现的多轮测试用例，供独立蓝队项目评估模型在尖锐批评、施压和证据变化下的表现。插件也提供本地 SQLite 证据工作台，可生成和导出中文提示词块。
 
-支持尖锐论辩、冷幽默与双方自愿的吐槽。针对具体说法、逻辑和行为，建立私密黑料档案，分析心理弱点，输出操纵或骚扰策略。人物均按用户 ID 和数据源隔离，记录需确认已获用户同意，可以逐条删除或全部撤回清除。
+红队用例只针对虚构的 AI 角色，可脱离聊天数据库单独运行。工作台针对已授权用户的具体说法、逻辑和行为保留引文，按用户 ID 和数据源隔离；撤回授权时清除派生数据。插件不连接被测 AI，也不自动发送回复。
 
 ## 启动
 
@@ -13,22 +13,24 @@ uv sync --locked
 uv run grudge-lab
 ```
 
-打开 <http://127.0.0.1:8765>。首次启动自动创建 `data/demo.db`，包含 3 位虚构用户、30 条本人消息和 3 条用于检查角色过滤的机器人消息。可以用 `python3 run.py serve --port 8766` 更换端口。
+打开 <http://127.0.0.1:8765>。首次启动自动创建 `data/demo.db`，包含 3 位虚构用户、30 条本人消息和 3 条用于检查角色过滤的机器人消息。可以用 `uv run grudge-lab serve --port 8766` 更换端口。
 
 操作顺序：选择用户 → 确认同意并开启记忆 → 提取证据 → 选择表达强度 → 生成 → 复制或导出 `.md`。
 
 可直接查看 `examples/zhou-prompt.md`，其中使用虚构测试用户周野的对话证据。
 
-默认本地演示不发出外部请求，只覆盖少量示例偏好与测试梗，**具备任意聊天的语义分析能力**。真实分析需在“数据与模型”配置独立 LLM。
+默认本地演示只使用有限的规则，覆盖示例偏好与测试梗。任意聊天的语义分析需在“数据与模型”配置独立 LLM。
 
 ## AI 红队用例
 
-12 个虚构场景覆盖语气施压 `tone`、证据可靠性 `evidence`、约束边界 `boundaries` 和纠错恢复 `recovery`。每个用例包含目标 AI 角色、按顺序排列的 `turns`、和消息一一对应的 `turn_checks`、整组通过标准 `pass_criteria`，以及「严格谨慎使用」标记。`standard` 为两轮，`high` 追加第三轮。
+13 个虚构场景覆盖语气施压 `tone`、证据可靠性 `evidence`、约束边界 `boundaries` 和纠错恢复 `recovery`。每个用例包含目标 AI 角色、按顺序排列的 `turns`、和消息一一对应的 `turn_checks`、整组通过标准 `pass_criteria`，以及「严格谨慎使用」标记。`standard` 为两轮，`high` 追加第三轮。
 
 ```bash
 uv run grudge-lab redteam-catalog
-uv run grudge-lab redteam --scenario all --intensity high > redteam-cases.json
-uv run grudge-lab redteam --category evidence --seed 42 --limit 2 --format jsonl > redteam-smoke.jsonl
+mkdir -p artifacts
+uv run grudge-lab redteam --scenario all --intensity high > artifacts/redteam-cases.json
+uv run grudge-lab redteam --scenario compounded_pressure --intensity high
+uv run grudge-lab redteam --category evidence --seed 42 --limit 2 --format jsonl > artifacts/redteam-smoke.jsonl
 uv run grudge-lab mcp --redteam-only
 ```
 
@@ -72,7 +74,7 @@ flowchart TD
 | 用户角色值 | `user` | 仅读取此角色 |
 | 会话 / 群 ID | `room_id` | 可留空；为空时不接受跨消息的矛盾卡 |
 
-建议时间统一为 ISO 8601（包含时区）或整数时间戳。不同用户共用 ID 的机器人消息只有角色过滤正确才能排除。每次读取最近 1–1000 条，默认 120 条；这不是整库全历史扫描。需要全量历史时应自行实现分批、可回溯的分析作业，不能假定窗口外没有纠正。
+建议时间统一为 ISO 8601（包含时区）或整数时间戳。不同用户共用 ID 的机器人消息只有角色过滤正确才能排除。单次“提取证据”读取最近 1–1000 条，默认 120 条。全文索引分批处理已授权人物的全部历史，支持断点续跑和增量缓存；单个批次的观察无法证明别处没有后续纠正。
 
 例如已有 `logs(mid, uid, nickname, text, created, channel, speaker)`：依次映射到 `mid / uid / nickname / text / created / channel / speaker`，角色值按实际数据填写。
 
@@ -91,11 +93,12 @@ Base URL 例如 `https://your-provider.example/v1`，也可填写完整 `/chat/c
 
 API Key 只留在后端进程内存中，重启需重新填写；也可用环境变量 `GRUDGE_LLM_API_KEY`。不写入设置文件，不通过配置接口返回，不放在浏览器持久存储里。界面中“留空保存”会保留当前进程已有 Key；重启可清除。
 
-真实模式会把当前用户窗口内经过基础过滤的原文发送到指定服务，第二轮还包含候选卡。**关键词过滤不是隐私识别保证**：接入真实聊天前仍须获得相关授权、检查数据范围和供应商配置。本程序不会连接到主对话模型。
+单次“提取证据”会把当前窗口经过基础过滤的原文发送到指定服务，第二轮还包含候选卡。全文索引只接受本机模型接口（`localhost`、`127.0.0.1` 或 `::1`），请求禁用代理与重定向；如果本机服务会转发数据，仍需检查它的配置。关键词过滤无法保证识别所有敏感内容。
 
 ## 提示词与精度策略
 
 - 人物证据提示词提供两档措辞。`1` 为轻度玩笑，`2` 为中度严肃。
+- 风险独立分为四级。表达等级或风险达到 3 或 4 时，仅提供风险说明和经复核的安全改写，不生成攻击角度，也不计次数。
 - 每张记忆带类型、观察、回应角度和可追溯引文；矛盾卡至少两条不同消息且必须来自同一已知会话。
 - 模型先提取，再独立复核；复核可以拒绝但不能改写卡片。非法 JSON、缺失引用、其他用户 ID、伪造引文不会入库。
 - 测试数据故意包含撤回大话、补充范围、合理例外。演示规则避开已明确收回的例子；模型复核也被要求检查这些情况。
@@ -132,20 +135,26 @@ plugin.set_consent("zhou", False)  # 撤回并清除全部持久记忆
 ## CLI
 
 ```bash
-python3 run.py users
-python3 run.py consent zhou
-python3 run.py analyze zhou
-python3 run.py export zhou --intensity 2 --output artifacts/zhou-prompt.md
-python3 run.py consent zhou --revoke
-python3 run.py seed --path data/another-test.db
+uv run grudge-lab seed
+uv run grudge-lab users
+uv run grudge-lab consent zhou
+uv run grudge-lab analyze zhou
+uv run grudge-lab export zhou --intensity 2 --output artifacts/zhou-prompt.md
+uv run grudge-lab index zhou
+uv run grudge-lab search zhou --query 四十页
+uv run grudge-lab consent zhou --revoke
 uv run python -m unittest discover -s tests -v
 ```
 
 CLI 使用网页保存的配置；若为真实 LLM 模式，独立 CLI 进程需用环境变量提供 Key。
 
+本机 MCP 使用 stdio，从项目目录运行 `uv run grudge-lab mcp`。`list_people` 查询已授权人物，`start_index` / `get_index_status` 管理后台作业，`search_person_materials` / `get_material_detail` 返回证据和预览。预览不计数；实际采用后，用返回的 `use_receipt` 作为 `confirm_material_use` 的 `idempotency_key`。相同凭证只计一次。
+
+首次打开旧版记忆库时，插件自动重建引文索引，并清除旧高风险记录中未经新规则验证的改写。重新提取证据或建立索引可生成新的改写。迁移只修改派生记忆库。
+
 ## 素材检索性能
 
-检索结果共用一次批量凭证查询。凭证缺失时在同一写事务内重新校验授权和索引状态，再批量写入。预览计数规则与凭证确认方式沿用原接口。
+查询覆盖话题、素材和原话。先按相关性排序；相关性相同时，过去 24 小时采用过的素材后置，再按采用次数和最近采用时间升序排序。检索结果共用一次批量凭证查询，凭证缺失时在同一写事务内复核授权与索引状态，再补齐凭证。
 
 ```mermaid
 flowchart LR

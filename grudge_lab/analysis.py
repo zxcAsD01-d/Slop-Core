@@ -19,7 +19,7 @@ ANALYSIS_PROMPT = """你是中文对话证据编辑。任务是产出可核对�
 kind 只能是 preference、habit、tension、callback。tension 至少两条不同消息且来自同一会话。
 title 最多 28 字，observation 最多 240 字，angle 最多 160 字。精度优先，证据不足返回空列表。
 severity 为表达等级：1 轻度玩笑、2 中度严肃、3 高度伤害、4 重度过分；risk_level 是独立风险标签，取值 1–4。
-只允许生成 severity 与 risk_level 都不高于 2 的 angle。任一达到 3 或 4 时，angle 必须为空，只写抽象风险原因和针对论点的安全改写，不得给出伤害话术或攻击步骤。
+只允许生成 severity 与 risk_level 都不高于 2 的 angle。任一达到 3 或 4 时，angle 必须为空，只写抽象风险原因和独立的、针对论点的安全改写，不得沿用伤害话术或提供攻击步骤。
 最多 8 张卡。直接返回 JSON 对象，不要代码围栏，结构为：
 {"memories":[{"kind":"tension","title":"标题","observation":"含语境限制的客观观察",
 "topic":"话题","severity":1,"risk_level":1,"risk_reason":"风险原因或空字符串",
@@ -41,7 +41,7 @@ REVIEW_PROMPT = """你是严格的聊天证据复核员，只决定接受或拒�
 2. 后续消息是否撤回、解释范围、承认错误、补充理由？若化解所谓矛盾，拒绝该卡。
 3. 不同场景是否仍有同一标准？仅有不同措辞不能证明矛盾。
 4. 观察和回应角度是否超出证据，是否暗示人格缺陷、心理弱点，或利用身份、隐私、健康、创伤？有则拒绝。
-5. title、observation、angle 都必须成立，任何部分站不住脚就拒绝，不为制造笑点放宽标准。
+5. title、observation、angle、risk_reason 和 safe_rewrite 都要复核；拒绝把攻击话术伪装成风险说明或改写的卡。
 证据不能排除合理解释时拒绝。只保留准确且直接有用的卡。
 severity 或 risk_level 达到 3 时，候选不得包含攻击话术；只允许保留抽象风险说明和安全改写。
 返回 JSON：{"accepted_indexes":[0,2]}，索引对应 candidates 数组；全不合格返回空数组。
@@ -138,14 +138,15 @@ def validate_one(entry: object, indexed: Dict[str, Message]) -> Optional[Candida
         return None
     angle = entry.get("angle", "")
     risk_reason = entry.get("risk_reason", "")
-    safe_rewrite = entry.get("safe_rewrite") or angle
+    risk_only = severity >= 3 or risk_level >= 3
+    safe_rewrite = entry.get("safe_rewrite", "") if risk_only else (entry.get("safe_rewrite") or angle)
     for value, maximum in [(angle, 160), (risk_reason, 180), (safe_rewrite, 160)]:
         if not isinstance(value, str) or len(value) > maximum:
             return None
         if value and (SENSITIVE.search(value) or DIRECTIVE.search(value)):
             return None
-    risk_only = severity >= 3 or risk_level >= 3
-    if risk_only and (not risk_reason.strip() or not safe_rewrite.strip()):
+    if risk_only and (not risk_reason.strip() or not safe_rewrite.strip()
+                      or safe_rewrite.strip() == angle.strip()):
         return None
     if not risk_only and not angle.strip():
         return None

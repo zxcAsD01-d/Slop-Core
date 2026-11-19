@@ -2,6 +2,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from dataclasses import asdict
 from typing import Dict, List, Optional, Tuple
 from uuid import uuid4
@@ -88,7 +89,7 @@ class IndexManager:
         self.reader = SourceReader(source)
         self.store = store
         self.llm = llm
-        self.client = LLMClient(llm) if llm else None
+        self.client = LLMClient(llm, local_only=True) if llm else None
         self.page_size = page_size
         self.model_key = candidate_cache_key(llm)
         self._threads: Dict[str, threading.Thread] = {}
@@ -100,6 +101,8 @@ class IndexManager:
             raise AppError("该人物尚未授权索引")
         if not users:
             raise AppError("没有已授权的人物可建立索引")
+        if self.llm:
+            self.llm.endpoint(local_only=True)
         self.reader.validate()
         token = self.reader.change_token()
         job_id = self.store.create_index_job(self.source.key, users, token, self.model_key, self.page_size)
@@ -126,9 +129,12 @@ class IndexManager:
     def _run(self, job_id: str) -> None:
         lock_path = self.store.path.with_name(self.store.path.name + "." + self.source.key + ".index.lock")
         try:
-            with index_lock(lock_path) as acquired:
-                if acquired:
-                    self._run_locked(job_id)
+            while self.store.job_options(job_id)["status"] in {"queued", "running"}:
+                with index_lock(lock_path) as acquired:
+                    if acquired:
+                        self._run_locked(job_id)
+                        return
+                time.sleep(0.1)
         except AppError as error:
             LOGGER.error("索引锁失败：%s", error)
             self.store.fail_job(job_id, str(error))
@@ -136,9 +142,13 @@ class IndexManager:
     def _run_locked(self, job_id: str) -> None:
         try:
             options = self.store.job_options(job_id)
+            if options["status"] not in {"queued", "running"}:
+                return
             if options["model_key"] and options["model_key"] != self.model_key:
                 raise AppError("分析引擎配置已变化，旧任务已停止；请重新建立索引")
-            self.page_size = int(options["page_size"])
+            if self.llm:
+                self.llm.endpoint(local_only=True)
+            page_size = int(options["page_size"])
             self.reader.validate()
             while True:
                 pending = self.store.job_users(job_id)
@@ -148,7 +158,7 @@ class IndexManager:
                 item = pending[0]
                 user_id = str(item["user_id"])
                 try:
-                    self._process_user(job_id, item)
+                    self._process_user(job_id, item, page_size)
                 except AppError as error:
                     if not self.store.consent(self.source.key, user_id):
                         latest = self.store.job_user(job_id, user_id) or item
@@ -163,7 +173,7 @@ class IndexManager:
             LOGGER.exception("索引任务失败：%s", job_id)
             self.store.fail_job(job_id, str(error))
 
-    def _process_user(self, job_id: str, item: Dict[str, object]) -> None:
+    def _process_user(self, job_id: str, item: Dict[str, object], page_size: int) -> None:
         user_id = str(item["user_id"])
         if not self.store.consent(self.source.key, user_id):
             self.store.finish_job_user(job_id, user_id, "revoked", "用户撤回授权")
@@ -190,7 +200,7 @@ class IndexManager:
             )
         if phase == "analyzing":
             phase, cursor_text = self._analyze_user(
-                job_id, user_id, cursor_text, expected, count, generation,
+                job_id, user_id, cursor_text, expected, count, generation, page_size,
             )
         if phase == "verifying":
             self._verify_user(job_id, user_id, cursor_text, rolling, expected, count, generation, job_token)
@@ -223,12 +233,12 @@ class IndexManager:
         return "analyzing", "", "", expected, count, generation
 
     def _analyze_user(self, job_id: str, user_id: str, cursor_text: str, expected: str,
-                      count: int, generation: str) -> Tuple[str, str]:
+                      count: int, generation: str, page_size: int) -> Tuple[str, str]:
         sequence = int(cursor_text) if cursor_text else 0
         while True:
             if not self.store.consent(self.source.key, user_id):
                 raise AppError("用户已撤回授权")
-            messages, next_sequence = self.store.staged_message_page(job_id, user_id, sequence, self.page_size)
+            messages, next_sequence = self.store.staged_message_page(job_id, user_id, sequence, page_size)
             if not messages:
                 break
             digest = batch_digest(messages)

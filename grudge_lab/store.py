@@ -120,18 +120,6 @@ class MemoryStore:
                 );
                 CREATE INDEX IF NOT EXISTS material_previews_pending_material
                     ON material_previews(source_key, user_id, material_id) WHERE confirmed = 0;
-                CREATE VIRTUAL TABLE IF NOT EXISTS corpus_fts USING fts5(
-                    title, topic, observation, angle, risk_reason, safe_rewrite,
-                    content='corpus_materials', content_rowid='id', tokenize='trigram'
-                );
-                CREATE TRIGGER IF NOT EXISTS corpus_materials_ai AFTER INSERT ON corpus_materials BEGIN
-                    INSERT INTO corpus_fts(rowid, title, topic, observation, angle, risk_reason, safe_rewrite)
-                    VALUES (new.id, new.title, new.topic, new.observation, new.angle, new.risk_reason, new.safe_rewrite);
-                END;
-                CREATE TRIGGER IF NOT EXISTS corpus_materials_ad AFTER DELETE ON corpus_materials BEGIN
-                    INSERT INTO corpus_fts(corpus_fts, rowid, title, topic, observation, angle, risk_reason, safe_rewrite)
-                    VALUES ('delete', old.id, old.title, old.topic, old.observation, old.angle, old.risk_reason, old.safe_rewrite);
-                END;
             """)
             self._ensure_column(connection, "memories", "topic", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "memories", "severity", "INTEGER NOT NULL DEFAULT 4")
@@ -144,6 +132,41 @@ class MemoryStore:
             self._ensure_column(connection, "index_jobs", "source_token", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "index_jobs", "model_key", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(connection, "index_jobs", "page_size", "INTEGER NOT NULL DEFAULT 30")
+            self._ensure_corpus_fts(connection)
+
+    @staticmethod
+    def _ensure_corpus_fts(connection: sqlite3.Connection) -> None:
+        existing = {row[1] for row in connection.execute("PRAGMA table_info(corpus_fts)")}
+        if "evidence" in existing:
+            return
+        connection.execute("BEGIN IMMEDIATE")
+        if any(row[1] == "evidence" for row in connection.execute("PRAGMA table_info(corpus_fts)")):
+            return
+        connection.execute("DROP TRIGGER IF EXISTS corpus_materials_ai")
+        connection.execute("DROP TRIGGER IF EXISTS corpus_materials_ad")
+        connection.execute("DROP TRIGGER IF EXISTS corpus_materials_au")
+        connection.execute("DROP TABLE IF EXISTS corpus_fts")
+        # Older versions could save a disallowed angle in the rewrite field.
+        for table in ("memories", "corpus_materials"):
+            connection.execute(
+                f"UPDATE {table} SET angle = '', safe_rewrite = '' WHERE severity >= 3 OR risk_level >= 3"
+            )
+        fields = ("title", "topic", "observation", "angle", "risk_reason", "safe_rewrite", "evidence")
+        columns = ", ".join(fields)
+        new_values = ", ".join("new." + name for name in fields)
+        old_values = ", ".join("old." + name for name in fields)
+        connection.execute(f"CREATE VIRTUAL TABLE corpus_fts USING fts5({columns}, "
+                           "content='corpus_materials', content_rowid='id', tokenize='trigram')")
+        connection.execute("CREATE TRIGGER corpus_materials_ai AFTER INSERT ON corpus_materials BEGIN "
+                           f"INSERT INTO corpus_fts(rowid, {columns}) VALUES (new.id, {new_values}); END")
+        connection.execute("CREATE TRIGGER corpus_materials_ad AFTER DELETE ON corpus_materials BEGIN "
+                           f"INSERT INTO corpus_fts(corpus_fts, rowid, {columns}) "
+                           f"VALUES ('delete', old.id, {old_values}); END")
+        connection.execute(f"CREATE TRIGGER corpus_materials_au AFTER UPDATE OF {columns} ON corpus_materials BEGIN "
+                           f"INSERT INTO corpus_fts(corpus_fts, rowid, {columns}) "
+                           f"VALUES ('delete', old.id, {old_values}); "
+                           f"INSERT INTO corpus_fts(rowid, {columns}) VALUES (new.id, {new_values}); END")
+        connection.execute("INSERT INTO corpus_fts(corpus_fts) VALUES ('rebuild')")
 
     @staticmethod
     def _ensure_column(connection: sqlite3.Connection, table: str, name: str, definition: str) -> None:
@@ -221,8 +244,8 @@ class MemoryStore:
                 )
                 inserted += cursor.rowcount
                 connection.execute(
-                    "UPDATE memories SET source_digest = ? WHERE source_key = ? AND user_id = ? "
-                    "AND fingerprint = ?", (digest, source_key, user_id, candidate.fingerprint),
+                    "UPDATE memories SET source_digest = ?, safe_rewrite = ? WHERE source_key = ? AND user_id = ? "
+                    "AND fingerprint = ?", (digest, candidate.safe_rewrite, source_key, user_id, candidate.fingerprint),
                 )
         return inserted
 
@@ -263,11 +286,18 @@ class MemoryStore:
         with self.connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             active = connection.execute(
-                "SELECT id FROM index_jobs WHERE source_key = ? AND status IN ('queued','running') "
+                "SELECT id, source_token, model_key, page_size FROM index_jobs "
+                "WHERE source_key = ? AND status IN ('queued','running') "
                 "ORDER BY created_at DESC LIMIT 1", (source_key,),
             ).fetchone()
             if active:
-                return str(active[0])
+                current = {row[0] for row in connection.execute(
+                    "SELECT user_id FROM index_job_users WHERE job_id = ?", (active["id"],)
+                )}
+                if (current == set(user_ids) and active["source_token"] == source_token
+                        and active["model_key"] == model_key and active["page_size"] == page_size):
+                    return str(active["id"])
+                raise AppError("当前数据源正在执行另一项索引任务；请等待完成后重试", 409)
             job_id, timestamp = uuid4().hex, now()
             connection.execute(
                 "INSERT INTO index_jobs (id, source_key, status, source_token, model_key, page_size, created_at, updated_at) "
@@ -315,7 +345,7 @@ class MemoryStore:
     def job_options(self, job_id: str) -> Dict[str, object]:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT model_key, page_size FROM index_jobs WHERE id = ?", (job_id,),
+                "SELECT status, model_key, page_size FROM index_jobs WHERE id = ?", (job_id,),
             ).fetchone()
         if row is None:
             raise AppError("索引任务不存在", 404)
@@ -414,6 +444,9 @@ class MemoryStore:
                     "SELECT id FROM corpus_materials WHERE source_key = ? AND user_id = ? AND fingerprint = ?",
                     (source_key, user_id, candidate.fingerprint),
                 ).fetchone()
+                if not cursor.rowcount and candidate.safe_rewrite:
+                    connection.execute("UPDATE corpus_materials SET safe_rewrite = ? WHERE id = ? AND safe_rewrite = ''",
+                                       (candidate.safe_rewrite, material[0]))
                 connection.execute(
                     "INSERT OR IGNORE INTO corpus_generation_materials VALUES (?, ?)",
                     (generation_id, material[0]),
@@ -574,16 +607,21 @@ class MemoryStore:
                 "AND gm.generation_id = u.active_generation ")
         rank = ""
         if query:
+            escaped = json.dumps(query, ensure_ascii=False)[1:-1]
             if len(query) >= 3:
                 join += "JOIN corpus_fts ON corpus_fts.rowid = m.id "
                 conditions.append("corpus_fts MATCH ?")
-                parameters.append('"' + query.replace('"', '""') + '"')
+                match = '"' + query.replace('"', '""') + '"'
+                if escaped != query:
+                    match += ' OR evidence : "' + escaped.replace('"', '""') + '"'
+                parameters.append(match)
                 rank = "bm25(corpus_fts) ASC, "
             else:
                 conditions.append("(instr(m.title, ?) > 0 OR instr(m.topic, ?) > 0 OR "
                                   "instr(m.observation, ?) > 0 OR instr(m.angle, ?) > 0 OR "
-                                  "instr(m.risk_reason, ?) > 0 OR instr(m.safe_rewrite, ?) > 0)")
-                parameters.extend([query] * 6)
+                                  "instr(m.risk_reason, ?) > 0 OR instr(m.safe_rewrite, ?) > 0 OR "
+                                  "instr(m.evidence, ?) > 0)")
+                parameters.extend([query] * 6 + [escaped])
         if topic:
             conditions.append("m.topic = ?")
             parameters.append(topic)

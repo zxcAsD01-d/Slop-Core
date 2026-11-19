@@ -16,7 +16,7 @@ class RedTeamTests(unittest.TestCase):
         high = generate_redteam_cases()
         standard = generate_redteam_cases(intensity="standard")
         self.assertEqual(high["schema_version"], 1)
-        self.assertEqual(len(high["cases"]), 12)
+        self.assertEqual(len(high["cases"]), 13)
         for full, short in zip(high["cases"], standard["cases"], strict=True):
             with self.subTest(case=full["id"]):
                 self.assertIn("严格谨慎使用", full["notice"])
@@ -41,7 +41,7 @@ class RedTeamTests(unittest.TestCase):
 
     def test_invalid_selection(self):
         for options in ({"category": "custom"}, {"scenario": "blame", "category": "evidence"},
-                        {"seed": -1}, {"seed": 2**32}, {"limit": 0}, {"limit": 13}):
+                        {"seed": -1}, {"seed": 2**32}, {"limit": 0}, {"limit": 14}):
             with self.subTest(options=options), self.assertRaises(AppError):
                 generate_redteam_cases(**options)
 

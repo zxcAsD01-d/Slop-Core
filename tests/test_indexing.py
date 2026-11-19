@@ -12,7 +12,9 @@ from unittest.mock import Mock, patch
 
 from grudge_lab.analysis import validate_candidates
 from grudge_lab.errors import AppError
+from grudge_lab.index_lock import index_lock
 from grudge_lab.indexing import IndexManager, roll_digest
+from grudge_lab.llm import LLMConfig
 from grudge_lab.models import Candidate, Evidence, SourceConfig
 from grudge_lab.plugin import PromptPlugin
 from grudge_lab.prompts import build_prompt
@@ -56,10 +58,64 @@ class IndexingTests(unittest.TestCase):
         self.assertIn("四十页", matches["prompt_block"])
         self.assertEqual(self.source.read_bytes(), original)
         self.assertTrue(self.plugin.search_person_materials("zhou", "省时")["materials"])
+        for query in ["我喜欢短", "喜欢"]:
+            self.assertTrue(self.plugin.search_person_materials("zhou", query)["materials"])
         self.assertEqual(self.plugin.search_person_materials("zhou", '" OR x')["materials"], [])
         self.assertEqual(self.plugin.search_person_materials("zhou", topic="不存在")["materials"], [])
         with self.assertRaises(AppError):
             self.plugin.search_person_materials("lin")
+
+    def test_legacy_fts_migration_indexes_quotes_without_unsafe_rewrites(self):
+        self.index()
+        store = self.plugin.store
+        with store.connect() as connection:
+            for suffix in ("ai", "ad", "au"):
+                connection.execute(f"DROP TRIGGER corpus_materials_{suffix}")
+            connection.execute("DROP TABLE corpus_fts")
+            connection.execute("CREATE VIRTUAL TABLE corpus_fts USING fts5(title, tokenize='trigram')")
+            connection.execute("UPDATE corpus_materials SET risk_level = 4, safe_rewrite = 'UNSAFE_ATTACK_MARKER'")
+        upgraded = PromptPlugin(self.config, store.path)
+        result = upgraded.search_person_materials("zhou", "我喜欢短")
+        self.assertTrue(result["materials"])
+        self.assertTrue(all(not item["safe_rewrite"] for item in result["materials"]))
+        self.assertEqual(upgraded.search_person_materials("zhou", "UNSAFE_ATTACK_MARKER")["materials"], [])
+        upgraded.set_consent("zhou", False)
+        with store.connect() as connection:
+            total = connection.execute("SELECT COUNT(*) FROM corpus_fts WHERE corpus_fts MATCH ?",
+                                       ('"我喜欢短"',)).fetchone()[0]
+        self.assertEqual(total, 0)
+
+    def test_active_job_reuse_requires_same_people_and_settings(self):
+        create = self.plugin.store.create_index_job
+        key, token = self.config.key, self.plugin.reader.change_token()
+        job = create(key, ["zhou", "lin"], token, "model-a", 30)
+        self.assertEqual(job, create(key, ["lin", "zhou"], token, "model-a", 30))
+        for users, source_token, model, page_size in (
+            (["lin"], token, "model-a", 30), (["zhou", "lin"], "changed", "model-a", 30),
+            (["zhou", "lin"], token, "model-b", 30), (["zhou", "lin"], token, "model-a", 31),
+        ):
+            with self.subTest(users=users, model=model, page_size=page_size), self.assertRaises(AppError) as error:
+                create(key, users, source_token, model, page_size)
+            self.assertEqual(error.exception.status, 409)
+
+    def test_waiting_worker_takes_over_after_index_lock_release(self):
+        self.plugin.set_consent("zhou", True)
+        store = self.plugin.store
+        lock_path = store.path.with_name(f"{store.path.name}.{self.config.key}.index.lock")
+        with index_lock(lock_path) as acquired:
+            self.assertTrue(acquired)
+            job = self.manager.start("zhou")
+            worker = self.manager._threads[str(job["id"])]
+            worker.join(timeout=0.2)
+            self.assertTrue(worker.is_alive())
+        self.wait_job(str(job["id"]))
+
+    def test_full_index_refuses_remote_llm_before_creating_job(self):
+        self.plugin.set_consent("zhou", True)
+        manager = IndexManager(self.config, self.plugin.store, LLMConfig("https://model.invalid/v1", "test", ""))
+        with self.assertRaisesRegex(AppError, "只允许使用本机"):
+            manager.start("zhou")
+        self.assertFalse(self.plugin.store.resumable_jobs(self.config.key))
 
     def test_preview_idempotency_conflict_and_recent_sorting(self):
         self.index()
@@ -232,6 +288,9 @@ class IndexingTests(unittest.TestCase):
         result = build_prompt("zhou", "周野", [], risk_records=[asdict(candidates[0])])
         self.assertNotIn("UNSAFE_ATTACK_MARKER", result["text"])
         self.assertIn("请说明这次会议的时间安排", result["text"])
+        for rewrite in ("", "  ", raw["angle"]):
+            with self.subTest(rewrite=rewrite):
+                self.assertEqual(validate_candidates([{**raw, "safe_rewrite": rewrite}], messages), ([], 1))
         with self.assertRaises(AppError):
             build_prompt("zhou", "周野", [], intensity=3)
 

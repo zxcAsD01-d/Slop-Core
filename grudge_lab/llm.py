@@ -4,9 +4,14 @@ from dataclasses import dataclass
 from typing import Dict, List
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener, urlopen
 
 from .errors import ModelError
+
+
+class NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise ModelError("全文索引的本地模型接口不能重定向")
 
 
 @dataclass(frozen=True)
@@ -15,13 +20,16 @@ class LLMConfig:
     model: str
     api_key: str
 
-    def endpoint(self) -> str:
+    def endpoint(self, *, local_only: bool = False) -> str:
         parsed = urlparse(self.base_url)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             raise ModelError("LLM 地址必须是 http(s) URL")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise ModelError("LLM 地址不能包含账号、查询参数或片段")
-        if parsed.scheme == "http" and parsed.hostname not in ("localhost", "127.0.0.1", "::1"):
+        local = parsed.hostname in ("localhost", "127.0.0.1", "::1")
+        if local_only and not local:
+            raise ModelError("全文索引只允许使用本机 LLM（localhost、127.0.0.1 或 ::1）")
+        if parsed.scheme == "http" and not local:
             raise ModelError("远程 LLM 地址必须使用 HTTPS；本地服务可使用 HTTP")
         if not self.model.strip():
             raise ModelError("请填写分析模型名称")
@@ -30,15 +38,17 @@ class LLMConfig:
 
 
 class LLMClient:
-    def __init__(self, config: LLMConfig) -> None:
+    def __init__(self, config: LLMConfig, *, local_only: bool = False) -> None:
         self.config = config
+        self.local_only = local_only
+        self._local_opener = build_opener(ProxyHandler({}), NoRedirect()) if local_only else None
 
     def complete(self, messages: List[Dict[str, str]]) -> str:
         headers = {"Content-Type": "application/json"}
         if self.config.api_key:
             headers["Authorization"] = "Bearer " + self.config.api_key
         body = json.dumps({"model": self.config.model, "messages": messages}, ensure_ascii=False).encode()
-        request = Request(self.config.endpoint(), data=body, headers=headers, method="POST")
+        request = Request(self.config.endpoint(local_only=self.local_only), data=body, headers=headers, method="POST")
         payload = self._request(request)
         try:
             content = payload["choices"][0]["message"]["content"]
@@ -48,10 +58,10 @@ class LLMClient:
             raise ModelError("LLM 返回了空文本或不支持的内容格式")
         return content
 
-    @staticmethod
-    def _request(request: Request) -> Dict[str, object]:
+    def _request(self, request: Request) -> Dict[str, object]:
+        open_request = self._local_opener.open if self._local_opener else urlopen
         try:
-            with urlopen(request, timeout=60) as response:
+            with open_request(request, timeout=60) as response:
                 raw = response.read(1_048_577)
             if len(raw) > 1_048_576:
                 raise ModelError("LLM 响应超过 1 MB 限制")

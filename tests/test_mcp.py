@@ -47,6 +47,10 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         result = self.data(await session.call_tool("search_person_materials",
                           {"person_id": "zhou", "query": "四十页"}))
         material = result["materials"][0]
+        detail = self.data(await session.call_tool("get_material_detail",
+                           {"person_id": "zhou", "material_id": material["id"]}))
+        self.assertEqual(detail["use_receipt"], material["use_receipt"])
+        self.assertTrue(detail["evidence"])
         args = {"person_id": "zhou", "material_id": material["id"],
                 "idempotency_key": material["use_receipt"]}
         first = self.data(await session.call_tool("confirm_material_use", args))
@@ -56,6 +60,7 @@ class MCPTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(second["use_count"], 1)
         blocked = await session.call_tool("search_person_materials", {"person_id": "lin"})
         self.assertTrue(blocked.is_error)
+        self.assertIn("未授权", blocked.content[0].text)
 
     async def test_redteam_mcp_isolated_from_local_state(self):
         with tempfile.TemporaryDirectory() as temporary:

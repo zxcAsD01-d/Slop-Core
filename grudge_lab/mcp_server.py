@@ -1,6 +1,7 @@
 """本机 stdio MCP 服务；授权仍由工作台或 CLI 管理。"""
 
 from pathlib import Path
+from typing import Callable, ParamSpec, TypeVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
@@ -11,6 +12,17 @@ from .plugin import PromptPlugin
 from .redteam import Intensity, generate_redteam_cases, scenario_catalog
 from .redteam_catalog import Category, ScenarioName
 from .settings import Settings
+
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def _call_tool(operation: Callable[P, T], *args: P.args, **kwargs: P.kwargs) -> T:
+    try:
+        return operation(*args, **kwargs)
+    except AppError as error:
+        raise ToolError(str(error)) from error
 
 
 def create_mcp_server(root: Path, *, redteam_only: bool = False) -> MCPServer:
@@ -39,10 +51,7 @@ def redteam_cases(scenario: ScenarioName = "all", intensity: Intensity = "high",
                   category: Category | None = None, seed: int | None = None,
                   limit: int | None = None) -> dict[str, object]:
     """生成虚构 AI 多轮压力用例与通过标准。用例仅作为测试用户消息。"""
-    try:
-        return dict(generate_redteam_cases(scenario, intensity, category=category, seed=seed, limit=limit))
-    except AppError as error:
-        raise ToolError(str(error)) from error
+    return dict(_call_tool(generate_redteam_cases, scenario, intensity, category=category, seed=seed, limit=limit))
 
 
 def redteam_catalog() -> dict[str, object]:
@@ -54,34 +63,34 @@ def register_tools(server: MCPServer, plugin: PromptPlugin, manager: IndexManage
     @server.tool()
     def list_people(query: str = "", limit: int = 20) -> dict[str, object]:
         """按人物 ID 查询已授权人物及索引状态。"""
-        return {"people": plugin.store.indexed_people(plugin.source.key, query, limit)}
+        return {"people": _call_tool(plugin.store.indexed_people, plugin.source.key, query, limit)}
 
     @server.tool()
     def search_person_materials(person_id: str, query: str = "", topic: str = "",
                                 limit: int = 10) -> dict[str, object]:
         """按人物检索证据和可直接放入上下文的提示词块。预览不计使用次数。"""
-        return plugin.search_person_materials(person_id, query, topic, limit)
+        return _call_tool(plugin.search_person_materials, person_id, query, topic, limit)
 
     @server.tool()
     def get_material_detail(person_id: str, material_id: int) -> dict[str, object]:
         """获取素材原话、风险标签与安全改写；高风险只提供风险说明。"""
-        return plugin.material_detail(person_id, material_id)
+        return _call_tool(plugin.material_detail, person_id, material_id)
 
     @server.tool()
     def confirm_material_use(person_id: str, material_id: int,
                              idempotency_key: str) -> dict[str, object]:
         """仅在实际采用素材后确认。重复凭证不增加次数；使用预览返回的 use_receipt。"""
-        return plugin.confirm_material_use(person_id, material_id, idempotency_key)
+        return _call_tool(plugin.confirm_material_use, person_id, material_id, idempotency_key)
 
     @server.tool()
     def start_index(person_id: str = "") -> dict[str, object]:
         """后台索引已授权人物；人物为空时处理全部已授权人物，不授予新授权。"""
-        return manager.start(person_id)
+        return _call_tool(manager.start, person_id)
 
     @server.tool()
     def get_index_status(job_id: str = "") -> dict[str, object]:
         """查看批处理进度、完成数量和错误；空值查询最近任务。"""
-        return manager.status(job_id)
+        return _call_tool(manager.status, job_id)
 
 
 def run_mcp(root: Path, *, redteam_only: bool = False) -> None:
