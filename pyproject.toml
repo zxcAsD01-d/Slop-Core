@@ -7,8 +7,8 @@ name = "grudge-lab"
 version = "0.2.0"
 description = "Evidence-backed conversation memory and prompt block workbench"
 requires-python = ">=3.11"
-license = "PolyForm-Noncommercial-1.0.0"
-license-files = ["LICENSE", "NOTICE", "LICENSING.md", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md"]
+license = "CC-BY-NC-4.0"
+license-files = ["LICENSE", "NOTICE", "LICENSING.md", "COMMERCIAL.md", "THIRD_PARTY_NOTICES.md", "licenses/legacy/*"]
 dependencies = ["mcp>=2,<3"]
 
 [project.scripts]
