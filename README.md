@@ -191,4 +191,4 @@ data/demo.db       可重建的虚构测试库
 
 ## 许可
 
-项目权利人有权许可的原创代码自本次许可变更起采用 [PolyForm Noncommercial 1.0.0](LICENSE)。允许用途及机构例外以原文为准；超出许可允许范围的商业用途须另行取得书面授权，见 [商业授权](COMMERCIAL.md)。历史版本与第三方权利不变，详见 [授权范围](LICENSING.md) 和 [第三方声明](THIRD_PARTY_NOTICES.md)。这是公开源码的非商业许可项目。
+项目权利人有权许可的原创软件采用 [CC BY-NC 4.0](LICENSE)（知识共享署名—非商业性使用 4.0 国际），具体条件以原文为准；分享时须履行署名等义务并标明修改。超出许可允许范围的商业使用须另行取得书面授权，见 [商业授权](COMMERCIAL.md)。授权范围及历史权利见 [LICENSING.md](LICENSING.md)，第三方例外见 [第三方声明](THIRD_PARTY_NOTICES.md)。这是公开源码的非商业许可项目。
